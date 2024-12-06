@@ -10,12 +10,12 @@
 - Download msys2 and install it in "C:\_privat\bins" or you'll have to change all references to msys2
 - Open the 64-bit console
 - Run the following commands:
-  - ``pacman -Syu``
-  - If prompted to restart the terminal, close it and reopen the terminal and re-run the previous command
+  - ``pacman -Sy``
+  - ``pacman -Su``
   - ``pacman -S mingw-w64-ucrt-x86_64-gtk4``
   - ``pacman -S mingw-w64-ucrt-x86_64-toolchain base-devel``
   - ``pacman -S mingw-w64-ucrt-x86_64-cmake``
-  - ``pacman -S make``
+  - ``pacman -S mingw-w64-ucrt-x86_64-make``
   - ``pacman -S mingw-w64-ucrt-x86_64-gcc``
 - Put the following paths in your PATH environment variable:
   - "C:\_privat\bins\msys64\mingw64\bin"
