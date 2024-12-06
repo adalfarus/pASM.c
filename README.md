@@ -8,8 +8,9 @@
 
 ## How to run
 - Download msys2 and install it in "C:\_privat\bins" or you'll have to change all references to msys2
-- Open the 64-bit console
-- Run the following commands:
+- Open the 64-bit ucrt msys2 console
+- (These may or may not work for you)
+- Run the following commands, pressing ENTER for every prompt and re.-opening the terminal if it closes:
   - ``pacman -Sy``
   - ``pacman -Su``
   - ``pacman -S mingw-w64-ucrt-x86_64-gtk4``
