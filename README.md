@@ -9,17 +9,17 @@
 ## How to run
 - Download msys2 and install it in "C:\_privat\bins" or you'll have to change all references to msys2
 - Open the 64-bit mingw msys2 console
-- (These may or may not work for you)
 - Run the following commands, pressing ENTER for every prompt and re.-opening the terminal if it closes:
   - ``pacman -Sy``
   - ``pacman -Su``
   - ``pacman -S mingw-w64-x86_64-toolchain``
   - ``pacman -S mingw-w64-x86_64-cmake``
-  - ``pacman -S mingw-w64-x86_64-make``
+  - ``pacman -S mingw-w64-x86_64-libtiff``
+  - ``pacman -S mingw-w64-x86_64-freetype``
   - ``pacman -S mingw-w64-x86_64-gtk4``
-- Put the following paths in your PATH environment variable:
+- Install chocolatey and run ```choco install make``` (As administrator)
+- Put the following paths in your accounts PATH environment variable:
   - "C:\_privat\bins\msys64\mingw64\bin"
-  - "C:\_privat\bins\msys64\ucrt64\bin"
-  - "C:\_privat\bins\msys64\usr\bin"
+  - "C:\ProgramData\chocolatey\bin"
 - Open a Windows terminal and navigate to the folder with this file
 - Run ``call build_and_run.bat``
