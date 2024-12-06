@@ -13,13 +13,13 @@
   - ``pacman -Syu``
   - If prompted to restart the terminal, close it and reopen the terminal and re-run the previous command
   - ``pacman -S mingw-w64-ucrt-x86_64-gtk4``
-  - ``pacman -S mingw-w64-ucrt-x86_64-toolchain`` base-devel
+  - ``pacman -S mingw-w64-ucrt-x86_64-toolchain base-devel``
   - ``pacman -S mingw-w64-ucrt-x86_64-cmake``
   - ``pacman -S make``
   - ``pacman -S mingw-w64-ucrt-x86_64-gcc``
 - Put the following paths in your PATH environment variable:
-  - "C:\_privat\bins\msys64\mingw64\include"
-  - "C:\_privat\bins\msys64\mingw64\lib"
   - "C:\_privat\bins\msys64\mingw64\bin"
+  - "C:\_privat\bins\msys64\ucrt64\bin"
+  - "C:\_privat\bins\msys64\usr\bin"
 - Open a Windows terminal and navigate to the folder with this file
 - Run ``call build_and_run.bat``
