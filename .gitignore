@@ -2,7 +2,7 @@
 .vs/
 .vscode/
 .idea/
-.build/
+build/
 
 # Prerequisites
 *.d
