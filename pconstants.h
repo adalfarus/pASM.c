@@ -50,4 +50,18 @@
 // Instruction set mapping
 extern const char *INSTRUCTION_SET[];
 
+// Bridge codes
+#define IC_NOTHING 0
+// Backend interrupt codes (Gui->Backend)
+#define BIC_OPEN_FILE 1
+// #define BIC_RELOAD_FILE 2
+#define BIC_CLOSE_FILE 3
+#define BIC_CHANGE_CACHE_BITS 4
+#define BIC_START_STEP_BUTTON 5
+#define BIC_RESET_BUTTON 6
+#define BIC_SINGLE_STEP_MODE_TOGGLE 7
+// #define BIC_RESET_ACKNOWLEDGE 8
+// Gui interrupt codes (Backend->Gui)
+#define GIC_RESET 1
+
 #endif // CONSTANTS_H

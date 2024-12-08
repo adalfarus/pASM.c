@@ -24,6 +24,7 @@ uint64_t add_to_cache(Cache *cache, uint32_t address, uint32_t operand, bool as_
 void writeback_cache_entry(Cache *cache, uint8_t *ram, uint64_t cache_entry, uint8_t instruction_size);
 uint32_t get_u32_from_cache_or_ram(Cache *cache, uint8_t *ram, uint32_t address, uint8_t instruction_size);
 void print_cache(Cache *cache);
+Cache *duplicate_cache(const Cache *original);
 
 // *************************************************
 // Queue64
@@ -105,17 +106,18 @@ typedef struct { //
     char *instruction; // Pointer to memory managed by backend & reused each iteration
     char *coop_instruction; // Like in lda_ind
     Queue64 *change_queue; // All changes queued
-    bool *running; // Backend currently executing
+    bool *executing; // Backend currently executing
+    bool *single_step_mode;
     // Used for reset updates
-    Cache *data_cell_cache;
+    Cache *sdata_cell_cache;
     uint8_t *sram; // View into the static ram copy (Not getting modified)
     uint32_t sram_size;
 
     mutex_t mutex; // Who is allowed to modify it, read is always allowed
 } Bridge;
 
-void init_bridge(Bridge *gui_bridge, int32_t *accumulator, char *instruction, char *coop_instruction, bool *running, 
-                 Queue64 *change_queue, Cache *data_cell_cache, uint8_t *ram, uint8_t *sram, uint32_t sram_size);
+void init_bridge(Bridge *gui_bridge, int32_t *accumulator, char *instruction, char *coop_instruction, bool *executing, bool *single_step_mode, 
+                 Queue64 *change_queue, Cache *data_cell_cache, Cache *sdata_cell_cache, uint8_t *ram, uint8_t *sram, uint32_t sram_size);
 
 // *************************************************
 // Other

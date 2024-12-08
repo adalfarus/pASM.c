@@ -4,20 +4,14 @@
 #include "gtkgui.h"
 #include "CTools/treader.h"
 #include "pconstants.h" // For version info
+#include "putils.h"
 
 static thread_t gui_thread;
 static GtkApplication *app = NULL;
 static bool running = false;
 static bool cleaned_up = false;
-
-static void on_cache_bits_selected(GtkWidget *widget, gpointer data) {
-    int cache_bits = GPOINTER_TO_INT(data);
-    g_print("Cache Bits set to %d\n", cache_bits);
-}
-
-static void action_clbk(GSimpleAction *simple_action, G_GNUC_UNUSED GVariant *parameter, G_GNUC_UNUSED gpointer *data) {
-    g_print("The action %s was clicked.\n", g_action_get_name(G_ACTION(simple_action)));
-}
+Bridge *backend_bridge = NULL;
+static GtkWidget *start_stop_button = NULL;
 
 static void on_ia_help(GSimpleAction *action, GVariant *parameter, gpointer user_data) {
     // Parent window from user_data
@@ -154,50 +148,177 @@ static void on_app_help(GSimpleAction *action, GVariant *parameter, gpointer use
     gtk_window_present(GTK_WINDOW(dialog));
 }
 
-static void on_start_stop_clicked(GtkButton *button, gpointer data) {
-    const char *label = gtk_button_get_label(button);
-    if (g_strcmp0(label, "Start") == 0 || g_strcmp0(label, "Step") == 0) {
-        gtk_button_set_label(button, "Stop");
-        g_print("Start/Step clicked\n");
-    } else {
-        gtk_button_set_label(button, "Start");
-        g_print("Stop clicked\n");
+// Callback to handle the response from the file chooser dialog
+static void on_file_chooser_response(GtkWidget *dialog, int response_id, gpointer user_data) {
+    if (response_id == GTK_RESPONSE_ACCEPT) {
+        GtkFileChooser *chooser = GTK_FILE_CHOOSER(dialog);
+
+        // Get the selected file
+        GFile *file = gtk_file_chooser_get_file(chooser);
+        if (file) {
+            char *filename = g_file_get_path(file); // Get the file path as a string
+
+            // Process the selected file
+            mutex_lock(backend_bridge->mutex);
+            if (backend_bridge->backend_interrupt_code == IC_NOTHING) {
+                backend_bridge->backend_interrupt_code = BIC_OPEN_FILE;
+                backend_bridge->new_file_str = strdup(filename);
+            } else {
+                g_print("The backend has yet to process the last BIC or is in an error state\n");
+            }
+            mutex_unlock(backend_bridge->mutex);
+
+            g_print("File selected: %s\n", filename);
+            g_free(filename);
+            g_object_unref(file); // Free the GFile object
+        }
     }
+
+    // Destroy the dialog after use
+    gtk_window_destroy(GTK_WINDOW(dialog));
 }
 
-static void on_reset_clicked(GtkWidget *widget, gpointer data) {
-    g_print("Reset clicked\n");
+static void on_open_file(GSimpleAction *action, GVariant *parameter, gpointer user_data) {
+    GtkWidget *dialog;
+    // Retrieve the parent window stored in the action
+    GtkWindow *parent_window = GTK_WINDOW(g_object_get_data(G_OBJECT(action), "parent-window"));
+
+    if (!parent_window) {
+        g_print("Error: Parent window not set!\n");
+        return;
+    }
+    dialog = gtk_file_chooser_dialog_new("Open File", parent_window,
+                                         GTK_FILE_CHOOSER_ACTION_OPEN, "_Cancel",
+                                         GTK_RESPONSE_CANCEL, "_Open",
+                                         GTK_RESPONSE_ACCEPT, NULL);
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), parent_window); // Set the parent window to avoid warnings and ensure proper modality
+    gtk_widget_show(dialog); // Show the dialog asynchronously
+    g_signal_connect(dialog, "response", G_CALLBACK(on_file_chooser_response), parent_window); // Handle the response asynchronously
+}
+
+static void on_reload_file(GtkWidget *widget, gpointer user_data) {
+    mutex_lock(backend_bridge->mutex);
+    if (backend_bridge->backend_interrupt_code == IC_NOTHING) {
+        backend_bridge->backend_interrupt_code = BIC_OPEN_FILE;
+    } else {
+        g_print("Backend has not processed the last BIC or is in an error state.\n");
+    }
+    mutex_unlock(backend_bridge->mutex);
+}
+
+static void on_close_file(GtkWidget *widget, gpointer user_data) {
+    mutex_lock(backend_bridge->mutex);
+    if (backend_bridge->backend_interrupt_code == IC_NOTHING) {
+        backend_bridge->backend_interrupt_code = BIC_CLOSE_FILE;
+    } else {
+        g_print("Backend has not processed the last BIC or is in an error state.\n");
+    }
+    mutex_unlock(backend_bridge->mutex);
+}
+
+static void on_start_step(GtkWidget *widget, gpointer user_data) {
+    mutex_lock(backend_bridge->mutex);
+    if (backend_bridge->backend_interrupt_code == IC_NOTHING) {
+        backend_bridge->backend_interrupt_code = BIC_START_STEP_BUTTON;
+    } else {
+        g_print("Backend has not processed the last BIC or is in an error state.\n");
+    }
+    mutex_unlock(backend_bridge->mutex);
+}
+
+static void on_reset_file(GtkWidget *widget, gpointer user_data) {
+    mutex_lock(backend_bridge->mutex);
+    if (backend_bridge->backend_interrupt_code == IC_NOTHING) {
+        backend_bridge->backend_interrupt_code = BIC_RESET_BUTTON;
+    } else {
+        g_print("Backend has not processed the last BIC or is in an error state.\n");
+    }
+    mutex_unlock(backend_bridge->mutex);
+}
+
+static void on_toggle_single_step(GtkWidget *widget, gpointer user_data) {
+    mutex_lock(backend_bridge->mutex);
+    bool old_single_step = *backend_bridge->single_step_mode;
+    if (backend_bridge->backend_interrupt_code == IC_NOTHING) {
+        backend_bridge->backend_interrupt_code = BIC_SINGLE_STEP_MODE_TOGGLE;
+    } else {
+        g_print("Backend has not processed the last BIC or is in an error state.\n");
+    }
+    mutex_unlock(backend_bridge->mutex);
+    g_print("Single Step Mode toggled: %s\n", !old_single_step ? "Enabled" : "Disabled");
+}
+
+static void on_change_cache_bits(GtkWidget *widget, gpointer user_data) {
+    GtkEntry *entry = GTK_ENTRY(widget);
+    const char *text = gtk_editable_get_text(GTK_EDITABLE(entry));
+    int bits = atoi(text);
+
+    if (bits >= MIN_CACHE_BITS && bits <= MAX_CACHE_BITS) {
+        mutex_lock(backend_bridge->mutex);
+        if (backend_bridge->backend_interrupt_code == IC_NOTHING) {
+            backend_bridge->backend_interrupt_code = BIC_CHANGE_CACHE_BITS;
+            backend_bridge->new_cache_bits = (uint8_t)bits;
+        } else {
+            g_print("Backend has not processed the last BIC or is in an error state.\n");
+        }
+        mutex_unlock(backend_bridge->mutex);
+    } else {
+        g_print("Error: Cache bits must be between %u and %u.\n", MIN_CACHE_BITS, MAX_CACHE_BITS);
+    }
 }
 
 static gboolean on_key_press_event(GtkEventControllerKey *controller, guint keyval, guint keycode, GdkModifierType state, gpointer user_data) {
     if (state & GDK_CONTROL_MASK) { // Check if Ctrl key is pressed
         if (keyval == GDK_KEY_g) {
             g_print("Ctrl+G pressed (Start)\n");
-            on_start_stop_clicked(NULL, user_data);
+            on_start_step(NULL, user_data);
             return TRUE;
         }
         if (keyval == GDK_KEY_n) {
             g_print("Ctrl+N pressed (Reset)\n");
-            on_reset_clicked(NULL, user_data);
+            on_reset_file(NULL, user_data);
             return TRUE;
         }
         if (keyval == GDK_KEY_o) {
             g_print("Ctrl+o pressed (open file)\n");
-            on_reset_clicked(NULL, user_data);
+            on_open_file(NULL, NULL, user_data);
             return TRUE;
         }
         if (keyval == GDK_KEY_r) {
             g_print("Ctrl+r pressed (reload file)\n");
-            on_reset_clicked(NULL, user_data);
+            on_reload_file(NULL, user_data);
             return TRUE;
         }
         if (keyval == GDK_KEY_c) {
             g_print("Ctrl+c pressed (close file)\n");
-            on_reset_clicked(NULL, user_data);
+            on_close_file(NULL, user_data);
             return TRUE;
         }
     }
     return FALSE;
+}
+
+static void clear_grid(GtkWidget *grid) {
+    GtkWidget *child = gtk_widget_get_first_child(grid);
+    while (child) {
+        GtkWidget *next = gtk_widget_get_next_sibling(child);
+        gtk_widget_unparent(child);
+        child = next;
+    }
+}
+
+static void populate_grid(GtkWidget *grid, int start, int end) {
+    clear_grid(grid); // Clear existing grid content
+
+    for (int i = start; i <= end; i++) {
+        GtkWidget *label = gtk_label_new(g_strdup_printf("%d", i));
+        gtk_widget_set_margin_top(label, 5);
+        gtk_widget_set_margin_bottom(label, 5);
+        gtk_widget_set_margin_start(label, 10);
+        gtk_widget_set_margin_end(label, 10);
+        gtk_grid_attach(GTK_GRID(grid), label, 0, i - start, 1, 1);
+    }
+    gtk_widget_queue_draw(grid); // Redraw the grid
 }
 
 static void on_activate(GtkApplication *app, gpointer user_data) {
@@ -222,15 +343,7 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_vexpand(left_grid, TRUE);
 
     // Create cells for large range (1-100 for demo; adjust for larger ranges)
-    for (int i = 0; i <= 100; i++) {  // Adjust range for performance
-        GtkWidget *label = gtk_label_new(g_strdup_printf("%d", i));
-        gtk_widget_set_margin_top(label, 5);
-        gtk_widget_set_margin_bottom(label, 5);
-        gtk_widget_set_margin_start(label, 10);
-        gtk_widget_set_margin_end(label, 10);
-        // gtk_widget_set_size_request(label, 0, 30); // Set height for larger items
-        gtk_grid_attach(GTK_GRID(left_grid), label, 0, i - 1, 1, 1);
-    }
+    populate_grid(GTK_WIDGET(left_grid), 0, 100);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(left_scroll), left_grid);
 
     // RIGHT PANEL: Smaller scrollable grid and controls
@@ -247,15 +360,7 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(right_upper_grid, TRUE);
     gtk_widget_set_vexpand(right_upper_grid, TRUE);
 
-    for (int i = 0; i <= 15; i++) {
-        GtkWidget *label = gtk_label_new(g_strdup_printf("%d", i));
-        gtk_widget_set_margin_top(label, 5);
-        gtk_widget_set_margin_bottom(label, 5);
-        gtk_widget_set_margin_start(label, 10);
-        gtk_widget_set_margin_end(label, 10);
-        // gtk_widget_set_size_request(label, 0, 30); // Set height for larger items
-        gtk_grid_attach(GTK_GRID(right_upper_grid), label, 0, i - 1, 1, 1);
-    }
+    populate_grid(GTK_WIDGET(right_upper_grid), 0, 15);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(right_upper_scroll), right_upper_grid);
     gtk_box_append(GTK_BOX(right_panel), right_upper_scroll);
 
@@ -278,17 +383,19 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
 
     // Buttons (Start/Step/Stop and Reset)
     GtkWidget *button_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
-    GtkWidget *start_button = gtk_button_new_with_label("Start (Ctrl+g)"); // Step (Ctrl+s)
+    start_stop_button = gtk_button_new_with_label("Start (Ctrl+g)"); // Step (Ctrl+s)
     GtkWidget *reset_button = gtk_button_new_with_label("Reset (Ctrl+n)");
-    g_signal_connect(start_button, "clicked", G_CALLBACK(on_start_stop_clicked), NULL);
-    g_signal_connect(reset_button, "clicked", G_CALLBACK(on_reset_clicked), NULL);
-    gtk_box_append(GTK_BOX(button_box), start_button);
+    g_signal_connect(start_stop_button, "clicked", G_CALLBACK(on_start_step), NULL);
+    g_signal_connect(reset_button, "clicked", G_CALLBACK(on_reset_file), NULL);
+    gtk_box_append(GTK_BOX(button_box), start_stop_button);
     gtk_box_append(GTK_BOX(button_box), reset_button);
     gtk_box_append(GTK_BOX(right_lower_box), button_box);
 
     // Single Step Checkbox
     GtkWidget *single_step_checkbox = gtk_check_button_new_with_label("Single Step Mode");
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(single_step_checkbox), *backend_bridge->single_step_mode ? TRUE : FALSE);
     gtk_box_append(GTK_BOX(right_lower_box), single_step_checkbox);
+    g_signal_connect(single_step_checkbox, "toggled", G_CALLBACK(on_toggle_single_step), NULL);
 
     gtk_box_append(GTK_BOX(right_panel), right_lower_box);
 
@@ -308,9 +415,11 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(act_open));
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(act_reload));
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(act_close));
-    g_signal_connect(act_open, "activate", G_CALLBACK(action_clbk), NULL);
-    g_signal_connect(act_reload, "activate", G_CALLBACK(action_clbk), NULL);
-    g_signal_connect(act_close, "activate", G_CALLBACK(action_clbk), NULL);
+    g_signal_connect(act_open, "activate", G_CALLBACK(on_open_file), NULL);
+    g_signal_connect(act_reload, "activate", G_CALLBACK(on_reload_file), NULL);
+    g_signal_connect(act_close, "activate", G_CALLBACK(on_close_file), NULL);
+    // Store the window as user data in the actions
+    g_object_set_data(G_OBJECT(act_open), "parent-window", window);
     GMenuItem *menu_item_open = g_menu_item_new("Open (Ctrl+o)", "app.file_open");
     g_menu_append_item(file_menu, menu_item_open);
     GMenuItem *menu_item_reload = g_menu_item_new("Reload (Ctrl+r)", "app.file_reload");
@@ -323,7 +432,7 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     g_menu_append_submenu(menu_bar, "Settings", G_MENU_MODEL(settings_menu));
     GMenu *cache_bits_menu = g_menu_new();
     g_menu_append_submenu(settings_menu, "Cache Bits", G_MENU_MODEL(cache_bits_menu));
-    for (int i = 1; i <= 6; i++) {
+    for (int i = MIN_CACHE_BITS; i <= MAX_CACHE_BITS; i++) {
         char label[4];
         snprintf(label, sizeof(label), "%d", i);
         char action_name[32];
@@ -331,7 +440,7 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
 
         GSimpleAction *act_tmp = g_simple_action_new(action_name, NULL);
         g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(act_tmp));
-        g_signal_connect(act_tmp, "activate", G_CALLBACK(action_clbk), NULL);
+        g_signal_connect(act_tmp, "activate", G_CALLBACK(on_change_cache_bits), NULL);
         snprintf(action_name, sizeof(action_name), "app.cache_bits_%d", i);
         GMenuItem *menu_item_tmp = g_menu_item_new(label, action_name);
         g_menu_append_item(cache_bits_menu, menu_item_tmp);
@@ -395,13 +504,46 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     g_object_unref(menu_item_app_help);
 }
 
+static gboolean main_loop_update(gpointer user_data) {
+    if (!backend_bridge) return G_SOURCE_REMOVE;
+
+    GtkButton *button = GTK_BUTTON(start_stop_button); // Cast to GtkButton
+    const char *current_label = gtk_button_get_label(button);
+
+    mutex_lock(backend_bridge->mutex);
+
+    if (backend_bridge->gui_interrupt_code != IC_NOTHING) {
+        backend_bridge->gui_interrupt_code = IC_NOTHING;
+    }
+
+    if (!*backend_bridge->executing) {
+        if (g_strcmp0(current_label, "Start (Ctrl+g)") != 0) {
+            gtk_button_set_label(button, "Start (Ctrl+g)");
+        }
+    } else {
+        if (*backend_bridge->single_step_mode) {
+            if (g_strcmp0(current_label, "Step (Ctrl+s)") != 0) {
+                gtk_button_set_label(button, "Step (Ctrl+s)");
+            }
+        } else {
+            if (g_strcmp0(current_label, "Stop (Ctrl+e)") != 0) {
+                gtk_button_set_label(button, "Stop (Ctrl+e)");
+            }
+        }
+    }
+
+    mutex_unlock(backend_bridge->mutex);
+
+    return G_SOURCE_CONTINUE; // Continue running in the main loop
+}
+
 static void *gui_main_loop(void *arg) {
     app = gtk_application_new("com.example.pASMc", G_APPLICATION_DEFAULT_FLAGS);
 
     // Connect the activation signal to the application
     g_signal_connect(app, "activate", G_CALLBACK(on_activate), NULL);
 
-    // Add actions for menu items
+    /*/ Add actions for menu items
     for (int i = 1; i <= 8; i++) {
         char action_name[32];
         snprintf(action_name, sizeof(action_name), "cache_bits_%d", i);
@@ -416,9 +558,13 @@ static void *gui_main_loop(void *arg) {
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(g_simple_action_new("file_reload", NULL)));
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(g_simple_action_new("help_instruction_architecture", NULL)));
     g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(g_simple_action_new("help_version", NULL)));
+    */
 
     // Run the application
-    int status = g_application_run(G_APPLICATION(app), 0, NULL);
+    printf("Run app\n");
+    // Schedule periodic updates to run in the main GTK loop
+    g_timeout_add(100, main_loop_update, NULL); // Run every 100ms
+    g_application_run(G_APPLICATION(app), 0, NULL); // int status = 
 
     running = false;
     return NULL;
@@ -428,13 +574,14 @@ bool gtkgui_running() {
     return running;
 }
 
-bool gtkgui_start() {
+bool gtkgui_start(Bridge *bridge) {
     if (running) {
         g_print("GUI already running.\n");
         return false;
     }
 
     running = true;
+    backend_bridge = bridge;
 
     // Create the GUI thread using CTools
     if (thread_create(&gui_thread, gui_main_loop, NULL) != 0) {

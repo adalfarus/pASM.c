@@ -159,6 +159,34 @@ void print_cache(Cache *cache) {
     printf("}\n");
 }
 
+Cache *duplicate_cache(const Cache *original) {
+    if (!original) return NULL; // Handle NULL input
+
+    // Allocate memory for the new Cache structure
+    Cache *copy = malloc(sizeof(Cache));
+    if (!copy) {
+        perror("Failed to allocate memory for cache copy");
+        return NULL;
+    }
+
+    // Copy primitive fields
+    copy->size = original->size;
+    copy->cache_bits = original->cache_bits;
+
+    // Allocate memory for the entries array
+    copy->entries = malloc(copy->size * sizeof(uint64_t));
+    if (!copy->entries) {
+        perror("Failed to allocate memory for cache entries");
+        free(copy); // Free the structure itself before returning
+        return NULL;
+    }
+
+    // Copy the entries array
+    memcpy(copy->entries, original->entries, copy->size * sizeof(uint64_t));
+
+    return copy;
+}
+
 // *************************************************
 // Queue64
 // *************************************************
@@ -604,24 +632,26 @@ int parse_arguments(int argc, char *argv[], ParseableArgument *arguments, int nu
     return EXIT_SUCCESS;
 }
 
-void init_bridge(Bridge *gui_bridge, int32_t *accumulator, char *instruction, char *coop_instruction, bool *running, 
-                 Queue64 *change_queue, Cache *data_cell_cache, uint8_t *ram, uint8_t *sram, uint32_t sram_size) 
+void init_bridge(Bridge *gui_bridge, int32_t *accumulator, char *instruction, char *coop_instruction, bool *executing, bool *single_step_mode, 
+                 Queue64 *change_queue, Cache *data_cell_cache, Cache *sdata_cell_cache, uint8_t *ram, uint8_t *sram, uint32_t sram_size) 
 {
-    gui_bridge->backend_interrupt_code = 0;
-    gui_bridge->gui_interrupt_code = 0;
+    gui_bridge->backend_interrupt_code = IC_NOTHING;
+    gui_bridge->gui_interrupt_code = IC_NOTHING;
     gui_bridge->new_file_str = NULL;
     gui_bridge->new_cache_bits = 0;
     gui_bridge->accumulator = accumulator;
     gui_bridge->instruction = instruction;
     gui_bridge->coop_instruction = coop_instruction;
-    gui_bridge->running = running;
+    gui_bridge->executing = executing;
+    gui_bridge->single_step_mode = single_step_mode;
     gui_bridge->change_queue = change_queue;
-    gui_bridge->data_cell_cache = data_cell_cache;
+    gui_bridge->sdata_cell_cache = sdata_cell_cache;
     gui_bridge->sram = sram;
     gui_bridge->sram_size = sram_size;
     gui_bridge->mutex = malloc(sizeof(mutex_t));
     if (!gui_bridge->mutex) {
         fprintf(stderr, "Failed to allocate memory for gui_bridge mutex\n");
+        free_cache(sdata_cell_cache);
         free_cache(data_cell_cache);
         free_queue(change_queue);
         free(sram);
@@ -632,6 +662,7 @@ void init_bridge(Bridge *gui_bridge, int32_t *accumulator, char *instruction, ch
     if (result != 0) {
         fprintf(stderr, "Creation of mutex for gui_bridge failed\n");
         free(gui_bridge->mutex);
+        free_cache(sdata_cell_cache);
         free_cache(data_cell_cache);
         free_queue(change_queue);
         free(sram);
