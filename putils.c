@@ -239,6 +239,50 @@ void free_queue(Queue64 *queue) {
     queue->count = 0;
 }
 
+void reset_queue(Queue64 *queue) {
+    if (!queue || !queue->data) {
+        perror("Queue is not initialized or has been freed.");
+        return;
+    }
+    queue->front = 0;
+    queue->rear = 0;
+    queue->count = 0;
+}
+
+bool enqueue_with_bit(Queue64 *queue, uint64_t value, bool is_writeback) {
+    if (queue->count == queue->size) {
+        return false; // Queue is full
+    }
+
+    // Encode the extra bit into the value
+    if (is_writeback) {
+        value &= ~(1ULL << 63); // Clear MSB for writeback
+    } else {
+        value |= (1ULL << 63); // Set MSB for cache
+    }
+
+    queue->data[queue->rear] = value;
+    queue->rear = (queue->rear + 1) % queue->size;
+    queue->count++;
+    return true;
+}
+
+bool dequeue_with_bit(Queue64 *queue, uint64_t *value, bool *is_writeback) {
+    if (queue->count == 0) {
+        return false; // Queue is empty
+    }
+
+    uint64_t encoded_value = queue->data[queue->front];
+
+    // Decode the extra bit
+    *is_writeback = ~(encoded_value >> 63) & 1;
+    *value = encoded_value & ~(1ULL << 63); // Clear MSB to extract the value
+
+    queue->front = (queue->front + 1) % queue->size;
+    queue->count--;
+    return true;
+}
+
 // *************************************************
 // Other
 // *************************************************
@@ -339,6 +383,10 @@ char *lstrip(char *str, const char *chars_to_strip) {
     }
     strcpy(result, start);
     return result;
+}
+
+const char *get_non_empty_string(const char *str, const char *default_text) {
+    return (str && str[0] != '\0') ? str : default_text;
 }
 
 // *************************************************
@@ -632,16 +680,19 @@ int parse_arguments(int argc, char *argv[], ParseableArgument *arguments, int nu
     return EXIT_SUCCESS;
 }
 
-void init_bridge(Bridge *gui_bridge, int32_t *accumulator, char *instruction, char *coop_instruction, bool *executing, bool *single_step_mode, 
-                 Queue64 *change_queue, Cache *data_cell_cache, Cache *sdata_cell_cache, uint8_t *ram, uint8_t *sram, uint32_t sram_size) 
+void init_bridge(Bridge *gui_bridge, int32_t *accumulator, uint8_t *instruction_size, uint32_t *instruction_counter, char *instruction, char *coinstruction, char *cocoinstruction, bool *executing, 
+                 bool *single_step_mode, Queue64 *change_queue, Cache *data_cell_cache, Cache *sdata_cell_cache, uint8_t *ram, uint8_t *sram, uint32_t sram_size)
 {
     gui_bridge->backend_interrupt_code = IC_NOTHING;
     gui_bridge->gui_interrupt_code = IC_NOTHING;
     gui_bridge->new_file_str = NULL;
     gui_bridge->new_cache_bits = 0;
     gui_bridge->accumulator = accumulator;
+    gui_bridge->instruction_size = instruction_size;
+    gui_bridge->instruction_counter = instruction_counter;
     gui_bridge->instruction = instruction;
-    gui_bridge->coop_instruction = coop_instruction;
+    gui_bridge->coinstruction = coinstruction;
+    gui_bridge->cocoinstruction = cocoinstruction;
     gui_bridge->executing = executing;
     gui_bridge->single_step_mode = single_step_mode;
     gui_bridge->change_queue = change_queue;

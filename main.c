@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#define _WIN32_WINNT 0x0500
 #include <windows.h>
 #include <inttypes.h> // For PRIu32, etc.
 
@@ -57,10 +58,6 @@ int run_gui() {
     return EXIT_SUCCESS;
 }
 
-void process_events() {
-    
-}
-
 int p_program(char *script_path, bool disable_gui, bool single_step_mode, 
               uint32_t overwrite_memory_size, uint8_t overwrite_operand_size, 
               char *input_file, uint8_t cache_bits, uint8_t queue_size, 
@@ -74,7 +71,8 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
     // printf("input_file: %s\n\n", input_file ? input_file : "(none)");
 
     char instruction[20] = {0};
-    char coop_instruction[20] = {0};
+    char coinstruction[20] = {0};
+    char cocoinstruction[20] = {0};
     uint32_t instruction_counter = 0;
     uint64_t program_counter = 0;
     int32_t accumulator = 0;
@@ -87,6 +85,7 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
     bool running = true;
     bool executing = false;
     bool skip_turn = false;
+    bool peek = false;
     bool is_valid_result;
 
     // Uninitialized vars
@@ -105,7 +104,8 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
     }
 
     Bridge gui_bridge; // Will be here even without gui for easier integration
-    init_bridge(&gui_bridge, &accumulator, instruction, coop_instruction, &executing, &single_step_mode, &change_queue, data_cell_cache, sdata_cell_cache, NULL, NULL, 0);
+    init_bridge(&gui_bridge, &accumulator, &instruction_size, &instruction_counter, instruction, coinstruction, cocoinstruction, 
+                &executing, &single_step_mode, &change_queue, data_cell_cache, sdata_cell_cache, NULL, NULL, 0);
     
     // Set bridge code to open a file
     if (input_file[0] != '\0') {
@@ -149,7 +149,10 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                 
                 if (!ends_with(gui_bridge.new_file_str, ".p")) {
                     fprintf(stderr, "Usage: %s [arguments] <file>.p\n", script_path);
-                    return EXIT_FAILURE;
+                    mutex_lock(gui_bridge.mutex);
+                    gui_bridge.backend_interrupt_code = IC_NOTHING;
+                    mutex_unlock(gui_bridge.mutex);
+                    break;
                 }
                 char absolute_path[PATH_MAX];
                 if (realpath(gui_bridge.new_file_str, absolute_path) == NULL) {
@@ -160,8 +163,9 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                 ram = read_file(absolute_path, data_cell_cache, &file_size, &memory_size, &operand_size);
                 ram_size = file_size;
                 instruction_size = 1 + operand_size;
-                memset(instruction, 0, sizeof(instruction));
-                memset(coop_instruction, 0, sizeof(coop_instruction));
+                instruction[0] = '\0';
+                coinstruction[0] = '\0';
+                cocoinstruction[0] = '\0';
                 instruction_counter = 0;
                 program_counter = 0;
                 accumulator = 0;
@@ -227,6 +231,14 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
 
                 gui_bridge.backend_interrupt_code = IC_NOTHING;
                 // gui_bridge.new_file_str = NULL;
+                // Empty queue
+                reset_queue(&change_queue);
+                if (gui_bridge.gui_interrupt_code == IC_NOTHING) {
+                    gui_bridge.gui_interrupt_code = GIC_RESET;
+                } else if (!disable_gui) {
+                    fprintf(stderr, "The gui has stopped execution or is in an error state\n");
+                    exit(EXIT_FAILURE);
+                }
                 mutex_unlock(gui_bridge.mutex);
                 break;
             case BIC_CLOSE_FILE:
@@ -238,17 +250,18 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                 memory_size = 0;
                 operand_size = 0;
                 instruction_size = 0;
-                if (ram) {
+                if (ram != NULL) {
                     free(ram);
                     ram = NULL;
                 }
-                if (sram) {
+                if (sram != NULL) {
                     free(sram);
                     sram = NULL;
                 }
                 temp_ram = NULL;
-                memset(instruction, 0, sizeof(instruction));
-                memset(coop_instruction, 0, sizeof(coop_instruction));
+                instruction[0] = '\0';
+                coinstruction[0] = '\0';
+                cocoinstruction[0] = '\0';
 
                 free_cache(data_cell_cache);
                 if (sdata_cell_cache) {
@@ -257,8 +270,20 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
 
                 data_cell_cache = create_cache(cache_bits);
                 sdata_cell_cache = NULL;
+
+                gui_bridge.sdata_cell_cache = sdata_cell_cache;
+                gui_bridge.sram = sram;
+                gui_bridge.sram_size = ram_size;
+
                 // Empty queue
+                reset_queue(&change_queue);
                 gui_bridge.backend_interrupt_code = IC_NOTHING;
+                if (gui_bridge.gui_interrupt_code == IC_NOTHING) {
+                    gui_bridge.gui_interrupt_code = GIC_RESET;
+                } else if (!disable_gui) {
+                    fprintf(stderr, "The gui has stopped execution or is in an error state\n");
+                    exit(EXIT_FAILURE);
+                }
                 mutex_unlock(gui_bridge.mutex);
                 break;
             case BIC_CHANGE_CACHE_BITS:
@@ -271,17 +296,18 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                 }
                 cache_bits = gui_bridge.new_cache_bits;
                 if (cache_bits > MAX_CACHE_BITS || cache_bits < MIN_CACHE_BITS) {
-                    printf("The cache bits %u is not in range (%u:%u).", operand_size, MIN_CACHE_BITS, MAX_CACHE_BITS);
+                    printf("The cache bits %u is not in range (%u:%u).\n", operand_size, MIN_CACHE_BITS, MAX_CACHE_BITS);
                     free(ram);
                     if (sram) {
                         free(sram);
                     }
                     exit(EXIT_FAILURE);
                 }
+                executing = false;
                 data_cell_cache = create_cache(cache_bits);
-                sdata_cell_cache = duplicate_cache(data_cell_cache);
+                // sdata_cell_cache = duplicate_cache(data_cell_cache);
                 gui_bridge.backend_interrupt_code = BIC_OPEN_FILE;
-                printf("Reloading file from disk ...\n");
+                printf("Changed cache bits to %u.\nReloading file from disk ...\n", cache_bits);
                 skip_turn = true;
                 mutex_unlock(gui_bridge.mutex);
                 break;
@@ -292,11 +318,12 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                     gui_bridge.backend_interrupt_code = IC_NOTHING;
                     mutex_unlock(gui_bridge.mutex);
                     // exit(EXIT_FAILURE);
-                } else {
-                    executing = true;
-                    instruction_counter = 0;
+                } else if (!executing) {
                     program_counter = 0;
                     mutex_lock(gui_bridge.mutex);
+                    executing = true;
+                    instruction_counter = 0;
+                    reset_queue(&change_queue);
                     accumulator = 0;
                     gui_bridge.backend_interrupt_code = IC_NOTHING;
                     mutex_unlock(gui_bridge.mutex);
@@ -311,6 +338,18 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                     free_cache(data_cell_cache);
                     data_cell_cache = duplicate_cache(sdata_cell_cache);
                 } else if (data_cell_cache != NULL) reset_cache(data_cell_cache);
+                instruction[0] = '\0';
+                coinstruction[0] = '\0';
+                cocoinstruction[0] = '\0';
+                instruction_counter = 0;
+                program_counter = 0;
+                executing = false;
+
+                gui_bridge.sdata_cell_cache = sdata_cell_cache;
+                gui_bridge.sram = sram;
+                gui_bridge.sram_size = ram_size;
+                reset_queue(&change_queue);
+
                 gui_bridge.backend_interrupt_code = IC_NOTHING;
                 if (gui_bridge.gui_interrupt_code == IC_NOTHING) {
                     gui_bridge.gui_interrupt_code = GIC_RESET;
@@ -333,7 +372,7 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                 mutex_unlock(gui_bridge.mutex);
                 break;
         }
-        if (executing) {
+        if (executing && !peek) {
             if (single_step_mode && disable_gui) {
                 printf("\n");
                 print_cache(data_cell_cache);
@@ -358,67 +397,101 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                 switch (op_code) {
                     case LDA_IMM:
                         accumulator = sign_extend_i32(operand, operand_size);
-                        printf("[%u] LDA_IMM #%i\n", instruction_counter - 1, accumulator);
+                        snprintf(instruction, sizeof(instruction), "[%u] LDA_IMM #%i", instruction_counter - 1, accumulator);
+                        coinstruction[0] = '\0';
+                        cocoinstruction[0] = '\0';
                         break;
                     case LDA_DIR:
                         temp_i32 = (int32_t)get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size);
                         accumulator = sign_extend_i32(temp_i32, operand_size);
-                        printf("[%u] LDA_DIR %u (%i)\n", instruction_counter - 1, operand, accumulator);
+                        snprintf(instruction, sizeof(instruction), "[%u] LDA_DIR %u", instruction_counter - 1, operand);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %i", operand, accumulator);
+                        cocoinstruction[0] = '\0';
                         break;
                     case LDA_IND:
-                        printf("[%u] LDA_IND %u", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] LDA_IND %u", instruction_counter - 1, operand);
                         temp_u32 = get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size); // First level: Load the indirect address
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %u", operand, temp_u32);
                         temp_i32 = (int32_t)get_u32_from_cache_or_ram(data_cell_cache, ram, temp_u32, instruction_size); // Second level: Load the value at the indirect address
                         accumulator = sign_extend_i32(temp_i32, operand_size); // Store the final value in the accumulator
-                        printf(" (%i)\n", accumulator);
+                        snprintf(cocoinstruction, sizeof(cocoinstruction), "[%u] %i", temp_u32, accumulator);
                         break;
                     case STA_DIR:
                         // if address 0 writes back 0 we have a lot of trouble
                         temp_u64 = add_to_cache(data_cell_cache, operand, (uint32_t)accumulator, true, &is_valid_result);
+                        if (is_full(&change_queue)) {
+                            printf("QUEUE FULL\n");
+                            exit(1);
+                        }
                         if (is_valid_result) {
                             writeback_cache_entry(data_cell_cache, ram, temp_u64, instruction_size);
+                            enqueue_with_bit(&change_queue, temp_u64, true);
                         }
-                        printf("[%u] STA_DIR %u\n", instruction_counter - 1, operand);
+                        // printf("Queuing1 %u\n", operand);
+                        // printf("Making1 %u\n", (uint64_t)operand << 32 | accumulator);
+                        enqueue_with_bit(&change_queue, (uint64_t)operand << 32 | accumulator, false);
+                        snprintf(instruction, sizeof(instruction), "[%u] STA_DIR %u", instruction_counter - 1, operand);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %i", operand, accumulator);
+                        cocoinstruction[0] = '\0';
                         break;
                     case STA_IND:
-                        printf("[%u] STA_IND %u", instruction_counter - 1, operand);
-                        temp_u32 = get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size); // First level: Load the indirect address+
-                        printf(" (%u)\n", temp_u32);
+                        snprintf(instruction, sizeof(instruction), "[%u] STA_IND %u", instruction_counter - 1, operand);
+                        temp_u32 = get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size); // First level: Load the indirect address
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %u", operand, temp_u32);
                         // if address 0 writes back 0 we have a lot of trouble
                         temp_u64 = add_to_cache(data_cell_cache, temp_u32, (uint32_t)accumulator, true, &is_valid_result);
+                        if (is_full(&change_queue)) {
+                            printf("QUEUE FULL\n");
+                            exit(1);
+                        }
                         if (is_valid_result) {
                             writeback_cache_entry(data_cell_cache, ram, temp_u64, instruction_size);
+                            enqueue_with_bit(&change_queue, temp_u64, true);
                         }
+                        // printf("Queuing2 %u\n", temp_u32);
+                        enqueue_with_bit(&change_queue, (uint64_t)temp_u32 << 32 | accumulator, false);
+                        snprintf(cocoinstruction, sizeof(cocoinstruction), "[%u] %i", temp_u32, accumulator);
                         break;
                     case ADD_DIR:
                         temp_i32 = sign_extend_i32((int32_t)get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size), operand_size);
-                        printf("[%u] ADD_DIR %u (%i)\n", instruction_counter - 1, operand, temp_i32);
+                        snprintf(instruction, sizeof(instruction), "[%u] ADD_DIR %u", instruction_counter - 1, operand);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %i", operand, temp_i32);
+                        cocoinstruction[0] = '\0';
                         accumulator += temp_i32, operand_size;
                         break;
                     case SUB_DIR:
                         temp_i32 = sign_extend_i32((int32_t)get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size), operand_size);
-                        printf("[%u] SUB_DIR %u (%i)\n", instruction_counter - 1, operand, temp_i32);
+                        snprintf(instruction, sizeof(instruction), "[%u] SUB_DIR %u", instruction_counter - 1, operand);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %i", operand, temp_i32);
+                        cocoinstruction[0] = '\0';
                         accumulator -= temp_i32;
                         break;
                     case MUL_DIR:
                         temp_i32 = sign_extend_i32((int32_t)get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size), operand_size);
-                        printf("[%u] MUL_DIR %u (%i)\n", instruction_counter - 1, operand, temp_i32);
+                        snprintf(instruction, sizeof(instruction), "[%u] MUL_DIR %u", instruction_counter - 1, operand);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %i", operand, temp_i32);
+                        cocoinstruction[0] = '\0';
                         accumulator *= temp_i32;
                         break;
                     case DIV_DIR:
                         temp_i32 = sign_extend_i32((int32_t)get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size), operand_size);
-                        printf("[%u] DIV_DIR %u (%i)\n", instruction_counter - 1, operand, temp_i32);
+                        snprintf(instruction, sizeof(instruction), "[%u] DIV_DIR %u", instruction_counter - 1, operand);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %i", operand, temp_i32);
+                        cocoinstruction[0] = '\0';
                         accumulator /= temp_i32;
                         break;
                     case JMP_DIR:
                         instruction_counter = operand;
                         program_counter = instruction_counter * instruction_size;
-                        printf("[%u] JMP_DIR %u\n", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] JMP_DIR %u", instruction_counter - 1, operand);
+                        coinstruction[0] = '\0';
+                        cocoinstruction[0] = '\0';
                         break;
                     case JMP_IND:
-                        printf("[%u] JMP_IND %u", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] JMP_IND %u", instruction_counter - 1, operand);
                         temp_u32 = get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size);
-                        printf(" (%i)\n", temp_u32);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %u", operand, temp_u32);
+                        cocoinstruction[0] = '\0';
                         instruction_counter = temp_u32;
                         program_counter = instruction_counter * instruction_size;
                         break;
@@ -427,12 +500,15 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                             instruction_counter = operand;
                             program_counter = instruction_counter * instruction_size;
                         }
-                        printf("[%u] JNZ_DIR %u\n", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] JNZ_DIR %u", instruction_counter - 1, operand);
+                        coinstruction[0] = '\0';
+                        cocoinstruction[0] = '\0';
                         break;
                     case JNZ_IND:
-                        printf("[%u] JNZ_IND %u", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] JNZ_IND %u", instruction_counter - 1, operand);
                         temp_u32 = get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size);
-                        printf(" (%i)\n", temp_u32);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %u", operand, temp_u32);
+                        cocoinstruction[0] = '\0';
                         if (accumulator != 0) {
                             instruction_counter = temp_u32;
                             program_counter = instruction_counter * instruction_size;
@@ -443,12 +519,15 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                             instruction_counter = operand;
                             program_counter = instruction_counter * instruction_size;
                         }
-                        printf("[%u] JZE_DIR %u\n", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] JZE_DIR %u", instruction_counter - 1, operand);
+                        coinstruction[0] = '\0';
+                        cocoinstruction[0] = '\0';
                         break;
                     case JZE_IND:
-                        printf("[%u] JZE_IND %u", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] JZE_IND %u", instruction_counter - 1, operand);
                         temp_u32 = get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size);
-                        printf(" (%i)\n", temp_u32);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %u", operand, temp_u32);
+                        cocoinstruction[0] = '\0';
                         if (accumulator == 0) {
                             instruction_counter = temp_u32;
                             program_counter = instruction_counter * instruction_size;
@@ -459,12 +538,15 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                             instruction_counter = operand;
                             program_counter = instruction_counter * instruction_size;
                         }
-                        printf("[%u] JLE_DIR %u\n", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] JLE_DIR %u", instruction_counter - 1, operand);
+                        coinstruction[0] = '\0';
+                        cocoinstruction[0] = '\0';
                         break;
                     case JLE_IND:
-                        printf("[%u] JLE_IND %u", instruction_counter - 1, operand);
+                        snprintf(instruction, sizeof(instruction), "[%u] JLE_IND %u", instruction_counter - 1, operand);
                         temp_u32 = get_u32_from_cache_or_ram(data_cell_cache, ram, operand, instruction_size);
-                        printf(" (%i)\n", temp_u32);
+                        snprintf(coinstruction, sizeof(coinstruction), "[%u] %u", operand, temp_u32);
+                        cocoinstruction[0] = '\0';
                         if (accumulator <= 0) {
                             instruction_counter = temp_u32;
                             program_counter = instruction_counter * instruction_size;
@@ -472,7 +554,10 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                         break;
                     case STP:
                         executing = false;
-                        printf("[%u] STP\n", instruction_counter - 1);
+                        snprintf(instruction, sizeof(instruction), "[%u] STP", instruction_counter - 1);
+                        instruction_counter--;
+                        coinstruction[0] = '\0';
+                        cocoinstruction[0] = '\0';
                         print_cache(data_cell_cache);
                         for (uint32_t index = 0; index < data_cell_cache->size; index++) {
                             uint64_t entry = data_cell_cache->entries[index];
@@ -483,6 +568,7 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
 
                             uint64_t actual_entry = ((uint64_t)((stored_address << data_cell_cache->cache_bits) | index) << 32) | stored_operand;
                             writeback_cache_entry(data_cell_cache, ram, actual_entry, instruction_size);
+                            enqueue_with_bit(&change_queue, actual_entry, true);
                         }
                         reset_cache(data_cell_cache);
                         size_t ram_index = 0;
@@ -522,6 +608,7 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                     default:
                         break;
                 }
+                printf("%s (%s;%s)\n", instruction, coinstruction, cocoinstruction);
             } else {
                 if (program_counter + operand_size <= file_size) {
                     // program_counter += operand_size;
@@ -537,22 +624,31 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                     return EXIT_FAILURE;
                 }
             }
-            if (single_step_mode) {
-                if (disable_gui) {
-                    getchar();
-                } else {
-                    while (gtkgui_running() && single_step_mode) {
-                        mutex_lock(gui_bridge.mutex);
+        }
+        if (peek) peek = false;
+        if (executing && single_step_mode) {
+            peek = false;
+            if (disable_gui) {
+                getchar();
+            } else {
+                while (gtkgui_running() && single_step_mode) {
+                    mutex_lock(gui_bridge.mutex);
+                    if (gui_bridge.backend_interrupt_code != IC_NOTHING) {
                         if (gui_bridge.backend_interrupt_code == BIC_START_STEP_BUTTON) {
                             gui_bridge.backend_interrupt_code = IC_NOTHING;
                             mutex_unlock(gui_bridge.mutex);
                             break;
+                        } else { // Other codes
+                            peek = true;
+                            mutex_unlock(gui_bridge.mutex);
+                            break;
                         }
-                        mutex_unlock(gui_bridge.mutex);
                     }
+                    mutex_unlock(gui_bridge.mutex);
                 }
             }
-        } else if (disable_gui) {
+        }
+        if (!executing && disable_gui) {
             if (skip_turn) {
                 skip_turn = false;
                 continue;
@@ -730,6 +826,12 @@ int main(int argc, char *argv[]) {
         printf("  single-loop [sl]                   : Makes the program exit after one loop (1 file execution).\n");
         printf("  {positional_arg}.p                 : The input file, has to end in '.p'.\n");
         exit(EXIT_SUCCESS);
+    }
+
+    if (!disable_gui) {
+        HWND hWnd = GetConsoleWindow();
+        ShowWindow( hWnd, SW_MINIMIZE );  //won't hide the window without SW_MINIMIZE
+        ShowWindow( hWnd, SW_HIDE );
     }
 
     if (run_only_gui) {

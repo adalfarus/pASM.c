@@ -12,6 +12,14 @@ static bool running = false;
 static bool cleaned_up = false;
 Bridge *backend_bridge = NULL;
 static GtkWidget *start_stop_button = NULL;
+static GtkWidget *single_step_checkbox = NULL;
+GtkWidget *left_grid = NULL;
+GtkWidget *right_upper_grid = NULL;
+GtkWidget *cell_1_entry = NULL;
+GtkWidget *cell_2_entry = NULL;
+GtkWidget *cell_3_entry = NULL;
+GtkWidget *accumulator = NULL;
+size_t previous_slot_index = (size_t)-1;
 
 static void on_ia_help(GSimpleAction *action, GVariant *parameter, gpointer user_data) {
     // Parent window from user_data
@@ -219,7 +227,12 @@ static void on_close_file(GtkWidget *widget, gpointer user_data) {
 static void on_start_step(GtkWidget *widget, gpointer user_data) {
     mutex_lock(backend_bridge->mutex);
     if (backend_bridge->backend_interrupt_code == IC_NOTHING) {
-        backend_bridge->backend_interrupt_code = BIC_START_STEP_BUTTON;
+        if (*backend_bridge->executing && !*backend_bridge->single_step_mode) {
+            backend_bridge->backend_interrupt_code = BIC_SINGLE_STEP_MODE_TOGGLE;
+            gtk_check_button_set_active(GTK_CHECK_BUTTON(single_step_checkbox), TRUE);
+        } else {
+            backend_bridge->backend_interrupt_code = BIC_START_STEP_BUTTON;
+        }
     } else {
         g_print("Backend has not processed the last BIC or is in an error state.\n");
     }
@@ -248,10 +261,8 @@ static void on_toggle_single_step(GtkWidget *widget, gpointer user_data) {
     g_print("Single Step Mode toggled: %s\n", !old_single_step ? "Enabled" : "Disabled");
 }
 
-static void on_change_cache_bits(GtkWidget *widget, gpointer user_data) {
-    GtkEntry *entry = GTK_ENTRY(widget);
-    const char *text = gtk_editable_get_text(GTK_EDITABLE(entry));
-    int bits = atoi(text);
+static void on_change_cache_bits(GSimpleAction *simple_action, gpointer user_data) {
+    int bits = atoi(strrchr(g_action_get_name(G_ACTION(simple_action)), '_') + 1);
 
     if (bits >= MIN_CACHE_BITS && bits <= MAX_CACHE_BITS) {
         mutex_lock(backend_bridge->mutex);
@@ -269,30 +280,46 @@ static void on_change_cache_bits(GtkWidget *widget, gpointer user_data) {
 
 static gboolean on_key_press_event(GtkEventControllerKey *controller, guint keyval, guint keycode, GdkModifierType state, gpointer user_data) {
     if (state & GDK_CONTROL_MASK) { // Check if Ctrl key is pressed
-        if (keyval == GDK_KEY_g) {
-            g_print("Ctrl+G pressed (Start)\n");
-            on_start_step(NULL, user_data);
-            return TRUE;
-        }
-        if (keyval == GDK_KEY_n) {
-            g_print("Ctrl+N pressed (Reset)\n");
-            on_reset_file(NULL, user_data);
-            return TRUE;
-        }
-        if (keyval == GDK_KEY_o) {
-            g_print("Ctrl+o pressed (open file)\n");
-            on_open_file(NULL, NULL, user_data);
-            return TRUE;
-        }
-        if (keyval == GDK_KEY_r) {
-            g_print("Ctrl+r pressed (reload file)\n");
-            on_reload_file(NULL, user_data);
-            return TRUE;
-        }
-        if (keyval == GDK_KEY_c) {
-            g_print("Ctrl+c pressed (close file)\n");
-            on_close_file(NULL, user_data);
-            return TRUE;
+        switch (keyval) {
+            case GDK_KEY_g:
+                if (!*backend_bridge->executing) {
+                    g_print("Ctrl+g pressed (Start)\n");
+                    on_start_step(NULL, user_data);
+                    return TRUE;
+                }
+                break;
+            case GDK_KEY_s:
+                if (*backend_bridge->executing && *backend_bridge->single_step_mode) {
+                    g_print("Ctrl+s pressed (Step)\n");
+                    on_start_step(NULL, user_data);
+                    return TRUE;
+                }
+                break;
+            case GDK_KEY_e:
+                if (*backend_bridge->executing && !*backend_bridge->single_step_mode) {
+                    g_print("Ctrl+e pressed (Stop/End)\n");
+                    on_start_step(NULL, user_data);
+                    return TRUE;
+                }
+                break;
+            case GDK_KEY_n:
+                g_print("Ctrl+N pressed (Reset)\n");
+                on_reset_file(NULL, user_data);
+                return TRUE;
+            case GDK_KEY_o:
+                g_print("Ctrl+o pressed (open file)\n");
+                on_open_file(NULL, NULL, user_data);
+                return TRUE;
+            case GDK_KEY_r:
+                g_print("Ctrl+r pressed (reload file)\n");
+                on_reload_file(NULL, user_data);
+                return TRUE;
+            case GDK_KEY_c:
+                g_print("Ctrl+c pressed (close file)\n");
+                on_close_file(NULL, user_data);
+                return TRUE;
+            default:
+                break;
         }
     }
     return FALSE;
@@ -312,6 +339,7 @@ static void populate_grid(GtkWidget *grid, int start, int end) {
 
     for (int i = start; i <= end; i++) {
         GtkWidget *label = gtk_label_new(g_strdup_printf("%d", i));
+        gtk_widget_set_name(label, "grid-cell");
         gtk_widget_set_margin_top(label, 5);
         gtk_widget_set_margin_bottom(label, 5);
         gtk_widget_set_margin_start(label, 10);
@@ -338,12 +366,11 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(left_scroll, TRUE);
     gtk_widget_set_vexpand(left_scroll, TRUE);
 
-    GtkWidget *left_grid = gtk_grid_new();
+    left_grid = gtk_grid_new();
+    gtk_widget_set_name(left_grid, "grid");
     gtk_widget_set_hexpand(left_grid, TRUE);
     gtk_widget_set_vexpand(left_grid, TRUE);
 
-    // Create cells for large range (1-100 for demo; adjust for larger ranges)
-    populate_grid(GTK_WIDGET(left_grid), 0, 100);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(left_scroll), left_grid);
 
     // RIGHT PANEL: Smaller scrollable grid and controls
@@ -356,11 +383,13 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(right_upper_scroll, TRUE);
     gtk_widget_set_vexpand(right_upper_scroll, TRUE);
 
-    GtkWidget *right_upper_grid = gtk_grid_new();
+    right_upper_grid = gtk_grid_new();
+    GtkWidget *label = gtk_label_new("Cache is not initialized.");
+    gtk_grid_attach(GTK_GRID(right_upper_grid), label, 0, 0, 1, 1);
+    gtk_widget_set_name(right_upper_grid, "grid");
     gtk_widget_set_hexpand(right_upper_grid, TRUE);
     gtk_widget_set_vexpand(right_upper_grid, TRUE);
 
-    populate_grid(GTK_WIDGET(right_upper_grid), 0, 15);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(right_upper_scroll), right_upper_grid);
     gtk_box_append(GTK_BOX(right_panel), right_upper_scroll);
 
@@ -369,17 +398,42 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     gtk_widget_set_hexpand(right_lower_box, TRUE);
     gtk_widget_set_vexpand(right_lower_box, TRUE);
 
-    // Two Numbered Cells
-    GtkWidget *cell_1_entry = gtk_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(cell_1_entry), "Cell 1 (Set Number)");
-    GtkWidget *cell_2_entry = gtk_entry_new();
-    gtk_entry_set_placeholder_text(GTK_ENTRY(cell_2_entry), "Cell 2 (Set Number)");
-    gtk_box_append(GTK_BOX(right_lower_box), cell_1_entry);
-    gtk_box_append(GTK_BOX(right_lower_box), cell_2_entry);
+    // Create a grid for the numbered cells
+    GtkWidget *right_lower_grid = gtk_grid_new(); // Create a new grid
+    gtk_widget_set_name(right_lower_grid, "gridd");
+
+    // Create and configure the entries
+    cell_1_entry = gtk_label_new("n ");
+    gtk_widget_set_name(cell_1_entry, "sgrid-cell");
+    gtk_widget_set_margin_top(cell_1_entry, 5);
+    gtk_widget_set_margin_bottom(cell_1_entry, 5);
+    gtk_widget_set_margin_start(cell_1_entry, 10);
+    gtk_widget_set_margin_end(cell_1_entry, 10);
+    cell_2_entry = gtk_label_new("m ");
+    gtk_widget_set_name(cell_2_entry, "sgrid-cell");
+    gtk_widget_set_margin_top(cell_2_entry, 5);
+    gtk_widget_set_margin_bottom(cell_2_entry, 5);
+    gtk_widget_set_margin_start(cell_2_entry, 10);
+    gtk_widget_set_margin_end(cell_2_entry, 10);
+    cell_3_entry = gtk_label_new("s ");
+    gtk_widget_set_name(cell_3_entry, "sgrid-cell");
+    gtk_widget_set_margin_top(cell_3_entry, 5);
+    gtk_widget_set_margin_bottom(cell_3_entry, 5);
+    gtk_widget_set_margin_start(cell_3_entry, 10);
+    gtk_widget_set_margin_end(cell_3_entry, 10);
+
+    //gtk_label_set_xalign(GTK_LABEL(cell_1_entry), 0.0);
+    //gtk_label_set_xalign(GTK_LABEL(cell_2_entry), 0.0);
+    //gtk_widget_set_hexpand(cell_1_entry, TRUE);
+    //gtk_widget_set_hexpand(cell_2_entry, TRUE);
+    gtk_grid_attach(GTK_GRID(right_lower_grid), cell_1_entry, 0, 0, 1, 1);
+    gtk_grid_attach(GTK_GRID(right_lower_grid), cell_2_entry, 0, 1, 1, 1);
+    gtk_grid_attach(GTK_GRID(right_lower_grid), cell_3_entry, 0, 2, 1, 1);
+    gtk_box_append(GTK_BOX(right_lower_box), right_lower_grid);
 
     // Accumulator Label
-    GtkWidget *accumulator_label = gtk_label_new("Accumulator: 0");
-    gtk_box_append(GTK_BOX(right_lower_box), accumulator_label);
+    accumulator = gtk_label_new("Accumulator: 0");
+    gtk_box_append(GTK_BOX(right_lower_box), accumulator);
 
     // Buttons (Start/Step/Stop and Reset)
     GtkWidget *button_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
@@ -392,7 +446,7 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     gtk_box_append(GTK_BOX(right_lower_box), button_box);
 
     // Single Step Checkbox
-    GtkWidget *single_step_checkbox = gtk_check_button_new_with_label("Single Step Mode");
+    single_step_checkbox = gtk_check_button_new_with_label("Single Step Mode");
     gtk_check_button_set_active(GTK_CHECK_BUTTON(single_step_checkbox), *backend_bridge->single_step_mode ? TRUE : FALSE);
     gtk_box_append(GTK_BOX(right_lower_box), single_step_checkbox);
     g_signal_connect(single_step_checkbox, "toggled", G_CALLBACK(on_toggle_single_step), NULL);
@@ -478,9 +532,13 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     GtkCssProvider *css_provider = gtk_css_provider_new();
     gtk_css_provider_load_from_string(css_provider,
                                      "* { font-size: 18px; }"
-                                     "#grid-cell { background: #eaeaea; border: 1px solid #aaa; border-radius: 5px; }");
-    GtkStyleContext *context = gtk_widget_get_style_context(window);
-    gtk_style_context_add_provider(context, GTK_STYLE_PROVIDER(css_provider), GTK_STYLE_PROVIDER_PRIORITY_USER);
+                                     "#grid-cell { background: #ebe8e6; border: 1px solid #aaa; border-radius: 5px; }" //#f6f5f4 (a bit darker)
+                                     "#sgrid-cell { background: #eaeaea; border: 1px solid rgba(0, 255, 255, 0.5); border-radius: 5px; }"
+                                     "#grid { border: 2px solid #aaa; border-radius: 5px; }"
+                                     "#highlighted-cell { background: #ffdd00; border: 1px solid #ffff00; border-radius: 5px; }");
+    // Apply CSS globally to the display
+    GdkDisplay *display = gdk_display_get_default();
+    gtk_style_context_add_provider_for_display(display, GTK_STYLE_PROVIDER(css_provider), GTK_STYLE_PROVIDER_PRIORITY_USER);
 
     // Show the window
     gtk_window_present(GTK_WINDOW(window));
@@ -504,6 +562,37 @@ static void on_activate(GtkApplication *app, gpointer user_data) {
     g_object_unref(menu_item_app_help);
 }
 
+void highlight_cell(GtkWidget *grid, size_t new_slot_index, size_t *previous_slot_index) {
+    GtkWidget *current_child = gtk_widget_get_first_child(grid);
+    GtkWidget *new_target_label = NULL;
+    GtkWidget *previous_target_label = NULL;
+
+    size_t current_index = 0;
+
+    // Iterate through grid children to find the new and previous slots
+    while (current_child != NULL) {
+        if (current_index == new_slot_index) {
+            new_target_label = current_child;
+        }
+        if (previous_slot_index && current_index == *previous_slot_index) {
+            previous_target_label = current_child;
+        }
+
+        current_child = gtk_widget_get_next_sibling(current_child);
+        current_index++;
+    }
+
+    if (previous_target_label) {
+        gtk_widget_set_name(previous_target_label, "grid-cell");
+    }
+    if (new_target_label) {
+        gtk_widget_set_name(new_target_label, "highlighted-cell");
+    }
+    if (previous_slot_index) {
+        *previous_slot_index = new_slot_index;
+    }
+}
+
 static gboolean main_loop_update(gpointer user_data) {
     if (!backend_bridge) return G_SOURCE_REMOVE;
 
@@ -513,7 +602,161 @@ static gboolean main_loop_update(gpointer user_data) {
     mutex_lock(backend_bridge->mutex);
 
     if (backend_bridge->gui_interrupt_code != IC_NOTHING) {
+        if (backend_bridge->gui_interrupt_code == GIC_RESET) {
+            clear_grid(GTK_WIDGET(left_grid));
+            uint8_t *sram = backend_bridge->sram;
+            uint64_t sram_size = backend_bridge->sram_size;
+            uint8_t instruction_size = *backend_bridge->instruction_size;
+            uint8_t operand_size = instruction_size - 1;
+
+            size_t ram_index = 0;
+            size_t slot_index = 0;
+
+            while (ram_index < sram_size && sram != NULL) {
+                // Ensure there is enough space for a full instruction
+                if (ram_index + instruction_size > sram_size) {
+                    fprintf(stderr, "Incomplete instruction at offset %zu. Skipping.\n", ram_index);
+                    break;
+                }
+
+                // Read opcode and operand
+                uint8_t opcode = sram[ram_index];
+                uint32_t operand = 0;
+                int32_t signed_operand = 0;
+
+                if (opcode == 0) {
+                    // Opcode 0: Use sign-extended operand
+                    signed_operand = sign_extend_i32((uint32_t)sram[ram_index + 1], operand_size);
+                } else {
+                    // Normal unsigned operand
+                    memcpy(&operand, sram + ram_index + 1, operand_size);
+                }
+
+                // Get instruction name
+                const char *instruction_name = (opcode <= 99) ? INSTRUCTION_SET[opcode] : "UNKNOWN";
+
+                // Format the instruction string
+                char instruction_str[64];
+                if (opcode == 0) {
+                    snprintf(instruction_str, sizeof(instruction_str), "[%zu] %s %d", slot_index, instruction_name, signed_operand);
+                } else {
+                    snprintf(instruction_str, sizeof(instruction_str), "[%zu] %s %u", slot_index, instruction_name, operand);
+                }
+
+                // Create a new label for the grid slot
+                GtkWidget *label = gtk_label_new(instruction_str);
+                gtk_widget_set_name(label, "grid-cell");
+                gtk_widget_set_margin_top(label, 5);
+                gtk_widget_set_margin_bottom(label, 5);
+                gtk_widget_set_margin_start(label, 10);
+                gtk_widget_set_margin_end(label, 10);
+                gtk_label_set_xalign(GTK_LABEL(label), 0.0); // Align text to the left
+                gtk_grid_attach(GTK_GRID(left_grid), label, 0, slot_index, 1, 1);
+
+                // Move to the next instruction
+                ram_index += instruction_size;
+                slot_index++;
+            }
+            
+            gtk_widget_queue_draw(GTK_WIDGET(left_grid));
+            clear_grid(GTK_WIDGET(right_upper_grid));
+            Cache *cache = backend_bridge->sdata_cell_cache;
+            if (!cache || !cache->entries) {
+                GtkWidget *label = gtk_label_new("Cache is not initialized.");
+                gtk_grid_attach(GTK_GRID(right_upper_grid), label, 0, 0, 1, 1);
+            } else {
+                uint8_t cache_size = cache->size;
+
+                for (uint8_t i = 0; i < cache_size; i++) {
+                    uint64_t entry = cache->entries[i];
+
+                    // Extract cache information
+                    bool is_dirty = entry & (1ULL << 32);
+                    uint32_t stored_address = (uint32_t)((entry >> (32 + cache->cache_bits)) << cache->cache_bits);
+                    int32_t operand = (int32_t)(entry & 0xFFFFFFFF);
+
+                    // Format cache entry string
+                    char cache_entry_str[64];
+                    snprintf(cache_entry_str, sizeof(cache_entry_str), "{%d|%s}: [%u] %d", 
+                            i, is_dirty ? "D" : "C", stored_address | i, operand);
+
+                    // Create a new label for the cache entry
+                    GtkWidget *label = gtk_label_new(cache_entry_str);
+                    gtk_widget_set_name(label, "grid-cell");
+                    gtk_widget_set_margin_top(label, 5);
+                    gtk_widget_set_margin_bottom(label, 5);
+                    gtk_widget_set_margin_start(label, 10);
+                    gtk_widget_set_margin_end(label, 10);
+
+                    // Determine the row and column for this cache entry
+                    int row = i / 2;
+                    int col = i % 2;
+
+                    // Attach the label to the grid
+                    gtk_grid_attach(GTK_GRID(right_upper_grid), label, col, row, 1, 1);
+                }
+            }
+            gtk_widget_queue_draw(GTK_WIDGET(right_upper_grid));
+        }
         backend_bridge->gui_interrupt_code = IC_NOTHING;
+    }
+
+    highlight_cell(left_grid, *backend_bridge->instruction_counter, &previous_slot_index);
+
+    gtk_label_set_text(GTK_LABEL(cell_1_entry), strdup(get_non_empty_string(backend_bridge->instruction, "[n] instruction")));
+    gtk_label_set_xalign(GTK_LABEL(cell_1_entry), 0.0);
+    gtk_label_set_text(GTK_LABEL(cell_2_entry), strdup(get_non_empty_string(backend_bridge->coinstruction, "[m] co-instruction")));
+    gtk_label_set_xalign(GTK_LABEL(cell_2_entry), 0.0);
+    gtk_label_set_text(GTK_LABEL(cell_3_entry), strdup(get_non_empty_string(backend_bridge->cocoinstruction, "[s] co-co-instruction")));
+    gtk_label_set_xalign(GTK_LABEL(cell_3_entry), 0.0);
+    char accumulator_str[12];
+    snprintf(accumulator_str, sizeof(accumulator_str), "ACCU: %d", *backend_bridge->accumulator);
+    gtk_label_set_text(GTK_LABEL(accumulator), accumulator_str);
+
+    // Update from queue
+    //
+    while (!is_empty(backend_bridge->change_queue)) {
+        uint64_t value_gotten;
+        bool is_writeback = false;
+        dequeue_with_bit(backend_bridge->change_queue, &value_gotten, &is_writeback);
+        if (is_writeback) {
+            uint32_t address = (uint32_t)(value_gotten >> 32);
+            int32_t operand = (int32_t)value_gotten;
+
+            printf("Addrs %u", address);
+            printf("Op %i", operand);
+
+            // Format and update the label for the writeback
+            char writeback_str[64];
+            snprintf(writeback_str, sizeof(writeback_str), "[%u] %d", address, operand);
+
+            GtkWidget *label = gtk_grid_get_child_at(GTK_GRID(left_grid), 0, address);
+            if (label) {
+                gtk_label_set_text(GTK_LABEL(label), writeback_str);
+            } else {
+                g_print("Warning: Writeback address %u not found in left grid.\n", address);
+            }
+        } else {
+            uint8_t magic = 32 - backend_bridge->sdata_cell_cache->cache_bits;
+            uint8_t cache_idx = (uint8_t)((value_gotten << magic) >> magic + 32);
+            // printf("Idx %u\n", value_gotten);
+            // printf("Idx %u\n", cache_idx);
+            int32_t operand = (int32_t)value_gotten;
+
+            // Format and update the label for the cache update
+            char cache_update_str[64];
+            snprintf(cache_update_str, sizeof(cache_update_str), "{%d|%s}: [%u] %d", cache_idx, "U", cache_idx, operand);
+
+            int row = cache_idx / 2;
+            int col = cache_idx % 2;
+
+            GtkWidget *label = gtk_grid_get_child_at(GTK_GRID(right_upper_grid), col, row);
+            if (label) {
+                gtk_label_set_text(GTK_LABEL(label), cache_update_str);
+            } else {
+                g_print("Warning: Cache index %u not found in right grid.\n", cache_idx);
+            }
+        }
     }
 
     if (!*backend_bridge->executing) {

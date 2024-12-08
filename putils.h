@@ -37,17 +37,15 @@ typedef struct {
     size_t count;    // Number of elements in the queue
 } Queue64;
 
+bool enqueue_with_bit(Queue64 *queue, uint64_t value, bool is_writeback);
+bool dequeue_with_bit(Queue64 *queue, uint64_t *value, bool *is_writeback);
 void init_queue(Queue64 *queue, size_t size);
-
 bool enqueue(Queue64 *queue, uint64_t value);
-
 bool dequeue(Queue64 *queue, uint64_t *value);
-
 bool is_empty(const Queue64 *queue);
-
 bool is_full(const Queue64 *queue);
-
 void free_queue(Queue64 *queue);
+void reset_queue(Queue64 *queue);
 
 // *************************************************
 // Specialized
@@ -103,8 +101,11 @@ typedef struct { //
     uint8_t new_cache_bits; // Accompanies the change_cache_bits backend_interrupt_code
     // Used for per instruction updates
     int32_t *accumulator; // Only view
+    uint8_t *instruction_size;
+    uint32_t *instruction_counter;
     char *instruction; // Pointer to memory managed by backend & reused each iteration
-    char *coop_instruction; // Like in lda_ind
+    char *coinstruction; // Like in lda_dir
+    char *cocoinstruction; // Like in lda_ind
     Queue64 *change_queue; // All changes queued
     bool *executing; // Backend currently executing
     bool *single_step_mode;
@@ -116,8 +117,8 @@ typedef struct { //
     mutex_t mutex; // Who is allowed to modify it, read is always allowed
 } Bridge;
 
-void init_bridge(Bridge *gui_bridge, int32_t *accumulator, char *instruction, char *coop_instruction, bool *executing, bool *single_step_mode, 
-                 Queue64 *change_queue, Cache *data_cell_cache, Cache *sdata_cell_cache, uint8_t *ram, uint8_t *sram, uint32_t sram_size);
+void init_bridge(Bridge *gui_bridge, int32_t *accumulator, uint8_t *instruction_size, uint32_t *instruction_counter, char *instruction, char *coinstruction, char *cocoinstruction, bool *executing, 
+                 bool *single_step_mode, Queue64 *change_queue, Cache *data_cell_cache, Cache *sdata_cell_cache, uint8_t *ram, uint8_t *sram, uint32_t sram_size);
 
 // *************************************************
 // Other
@@ -129,5 +130,6 @@ void print_buffer_in_hex(const void *buffer, size_t size);
 void print_buffer(const void *buffer, size_t size);
 bool is_in_set(char c, const char *set);
 char *lstrip(char *str, const char *chars_to_strip);
+const char *get_non_empty_string(const char *str, const char *default_text);
 
 #endif // UTILS_H
