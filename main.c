@@ -84,7 +84,6 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
     uint32_t operand;
     bool running = true;
     bool executing = false;
-    bool skip_turn = false;
     bool peek = false;
     bool is_valid_result;
 
@@ -308,7 +307,7 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
                 // sdata_cell_cache = duplicate_cache(data_cell_cache);
                 gui_bridge.backend_interrupt_code = BIC_OPEN_FILE;
                 printf("Changed cache bits to %u.\nReloading file from disk ...\n", cache_bits);
-                skip_turn = true;
+                continue;
                 mutex_unlock(gui_bridge.mutex);
                 break;
             case BIC_START_STEP_BUTTON:
@@ -649,10 +648,6 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
             }
         }
         if (!executing && disable_gui) {
-            if (skip_turn) {
-                skip_turn = false;
-                continue;
-            }
             char command[256];
             printf("\nSimple CLI for pASM.c\n");
             while (1) {

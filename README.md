@@ -1,5 +1,8 @@
 # pASM.c
- A reimplementation of an emulator in c
+ A reimplementation of an emulator in c.
+
+ [Windows10Theme](https://github.com/B00merang-Project/Windows-10) by [
+B00MERANG Project](https://github.com/B00merang-Project)
  
 ## Compatibility
 - Windows 10 & 11 -> Guaranteed
@@ -17,7 +20,7 @@
   - ``pacman -S mingw-w64-x86_64-libtiff``
   - ``pacman -S mingw-w64-x86_64-freetype``
   - ``pacman -S mingw-w64-x86_64-gtk4``
-- Install chocolatey and run ```choco install make``` (As administrator)
+  - ``pacman -S mingw-w64-x86_64-make`` This installs mingw32-make
 - Put the following paths in your accounts PATH environment variable:
   - "C:\_privat\bins\msys64\mingw64\bin"
   - "C:\ProgramData\chocolatey\bin"
