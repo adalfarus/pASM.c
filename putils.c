@@ -4,6 +4,8 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <time.h>
+#include <string.h>
+#include <errno.h>
 
 #include "putils.h"
 #include "pconstants.h"
@@ -288,7 +290,7 @@ bool dequeue_with_bit(Queue64 *queue, uint64_t *value, bool *is_writeback) {
 // *************************************************
 void print_bits(uint64_t num, int bit_count) {
     for (int i = bit_count - 1; i >= 0; i--) {
-        printf("%d", (num >> i) & 1); // Extract and print the i-th bit
+        printf("%" PRIu64 "", (num >> i) & 1); // Extract and print the i-th bit
         if (i % 8 == 0 && i != 0) {
             puts(" ");
         }
@@ -445,12 +447,12 @@ uint8_t *read_file(char *absolute_path, Cache *cache, uint64_t *outer_file_size,
     fseek(p_file, header_size, SEEK_SET);
 
     if (file_size > MAX_PROGRAM_SIZE * instruction_size) {
-        fprintf(stderr, "File size exceeds maximum program size of %uB.\n", MAX_PROGRAM_SIZE * instruction_size);
+        fprintf(stderr, "File size exceeds maximum program size of %" PRIu64 "B.\n", MAX_PROGRAM_SIZE * instruction_size);
         fclose(p_file);
         free_cache(cache);
         exit(EXIT_FAILURE);
     } else if (file_size > memory_size * instruction_size) {
-        fprintf(stderr, "File size exceeds specified memory size of %uB.\n", memory_size * instruction_size);
+        fprintf(stderr, "File size exceeds specified memory size of %" PRIu32 "B.\n", memory_size * instruction_size);
         fclose(p_file);
         free_cache(cache);
         exit(EXIT_FAILURE);
@@ -486,7 +488,7 @@ uint8_t *read_file(char *absolute_path, Cache *cache, uint64_t *outer_file_size,
     while (!feof(p_file)) {
         clock_gettime(CLOCK_MONOTONIC, &start);
         if (buffer_pointer != total_size) {
-            printf("%u != %u\n", buffer_pointer, total_size);
+            printf("%zu != %zu\n", buffer_pointer, total_size);
             remaining_buffer_size = total_size - buffer_pointer;
             memmove(buffer, buffer + buffer_pointer, remaining_buffer_size);
         } else {remaining_buffer_size = 0;}

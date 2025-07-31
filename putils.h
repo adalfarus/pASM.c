@@ -114,7 +114,7 @@ typedef struct { //
     uint8_t *sram; // View into the static ram copy (Not getting modified)
     uint32_t sram_size;
 
-    mutex_t mutex; // Who is allowed to modify it, read is always allowed
+    mutex_t *mutex; // Who is allowed to modify it, read is always allowed
 } Bridge;
 
 void init_bridge(Bridge *gui_bridge, int32_t *accumulator, uint8_t *instruction_size, uint32_t *instruction_counter, char *instruction, char *coinstruction, char *cocoinstruction, bool *executing, 

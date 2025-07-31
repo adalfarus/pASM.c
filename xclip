@@ -1,19 +1,9 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
-
-#ifdef _WIN32
-  #define _WIN32_WINNT 0x0500
-  #include <windows.h>
-#else
-  #include <fcntl.h>
-  #include <unistd.h>
-  #include <limits.h>
-  #define MAX_PATH PATH_MAX
-#endif
-
+#define _WIN32_WINNT 0x0500
+#include <windows.h>
 #include <inttypes.h> // For PRIu32, etc.
-#include <string.h>
 
 #include "putils.h"
 #include "gtkgui.h"
@@ -22,7 +12,6 @@
 // Dynamically attach to the parent console or suppress output
 static void configure_console_output(uint64_t path_length) {
     // Attempt to attach to the parent process's console
-#ifdef _WIN32
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
         freopen("CONOUT$", "w", stdout); // Redirect stdout to parent console
         freopen("CONOUT$", "w", stderr); // Redirect stderr to parent console
@@ -32,31 +21,13 @@ static void configure_console_output(uint64_t path_length) {
         freopen("NUL", "w", stdout);
         freopen("NUL", "w", stderr);
     }
-#else
-    int fd = open("/dev/tty", O_RDWR);
-    if (fd >= 0) {
-        dup2(fd, STDOUT_FILENO);
-	dup2(fd, STDERR_FILENO);
-	close(fd);
-    } else {
-    	int null_fd = open("/dev/null", O_RDWR);
-	if (null_fd >= 0) {
-	    dup2(null_fd, STDOUT_FILENO);
-	    dup2(null_fd, STDERR_FILENO);
-	    close(null_fd);
-	} else {
-	    // Failed to open /dev/null, serious problem
-	    _exit(1);
-	}
-    }
-#endif
     
     // Here we do some tombfoolery to get the terminal to behave
-    printf("\033[%" PRIu64 "D", path_length);
+    printf("\033[%uD", path_length);
     for (int i = 0; i < path_length; i++) {
         printf(" ");
     }
-    printf("\033[%" PRIu64 "D", path_length);
+    printf("\033[%uD", path_length);
 }
 
 void on_close() {
@@ -200,7 +171,7 @@ int p_program(char *script_path, bool disable_gui, bool single_step_mode,
 
                 if (overwrite_memory_size > 0) {
                     if (overwrite_memory_size > MAX_MEMORY_SIZE || overwrite_memory_size < MIN_MEMORY_SIZE) {
-                        printf("The memory size %" PRIu32 " is not in range (%" PRIu32 ":%" PRIu32 ").", overwrite_memory_size, MIN_MEMORY_SIZE, MAX_MEMORY_SIZE);
+                        printf("The memory size %u is not in range (%u:%u).", overwrite_memory_size, MIN_MEMORY_SIZE, MAX_MEMORY_SIZE);
                         free_cache(data_cell_cache);
                         // free(gui_bridge);
                         gtkgui_stop();
@@ -852,11 +823,11 @@ int main(int argc, char *argv[]) {
         exit(EXIT_SUCCESS);
     }
 
-    /*if (!disable_gui) {
+    if (!disable_gui) {
         HWND hWnd = GetConsoleWindow();
         ShowWindow( hWnd, SW_MINIMIZE );  //won't hide the window without SW_MINIMIZE
         ShowWindow( hWnd, SW_HIDE );
-    }*/
+    }
 
     if (run_only_gui) {
         exit_code = run_gui();

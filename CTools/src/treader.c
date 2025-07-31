@@ -53,7 +53,7 @@ int mutex_unlock(mutex_t *mutex) {
 }
 
 int mutex_destroy(mutex_t *mutex) {
-    return pthread_mutex_destory(mutex);
+    return pthread_mutex_destroy(mutex);
 }
 
 #endif

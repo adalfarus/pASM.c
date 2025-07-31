@@ -10,19 +10,20 @@
     #include <limits.h>
     #include <unistd.h>
 #endif
+#include <stdint.h>
 
 #define APP_NAME "pASM.c"
 #define VERSION "1.0.0"
 #define COPYRIGHT "© 2024 BeyerCorp"
 
-#define MIN_MEMORY_SIZE 1
-#define MAX_MEMORY_SIZE 4294967295  // 4mb * instruction_size
+#define MIN_MEMORY_SIZE ((uint32_t)1)
+#define MAX_MEMORY_SIZE ((uint32_t)4294967295)  // 4mb * instruction_size
 #define MIN_OPERAND_SIZE 1
 #define MAX_OPERAND_SIZE 4 // max_instruction_size = 5
 #define MIN_CACHE_BITS 1
 #define MAX_CACHE_BITS 6 // Number of bits to use for the index (e.g., 4 bits for 16 entries)
 #define MAX_CACHE_SIZE (1 << MAX_CACHE_BITS) // Total cache size based on MAX_CACHE_BITS
-#define MAX_PROGRAM_SIZE 21474836484 // 2GB or 2,048mb * instruction_size
+#define MAX_PROGRAM_SIZE ((uint64_t)21474836484) // 2GB or 2,048mb * instruction_size
 
 #define MIN_READ_BUFFER_SIZE 512       // Minimum read buffer size (512 bytes)
 #define MAX_READ_BUFFER_SIZE (4 * 1024 * 1024) // Maximum read buffer size (4 MB)
