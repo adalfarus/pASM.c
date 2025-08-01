@@ -7,7 +7,7 @@ B00MERANG Project](https://github.com/B00merang-Project)
 ## Compatibility
 - Windows 10 & 11 -> Guaranteed
 - Windows 7 and lower -> May work
-- Posix / macOS -> Will work with some patches, mostly already cross platform
+- GNU+Linux / Posix (macOS) -> Will work in GUI mode
 
 ## How to run
 - Download msys2 and install it in "C:\_privat\bins" or you'll have to change all references to msys2
